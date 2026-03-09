@@ -572,9 +572,9 @@
     async function fetchSub(sub) {
       if (state.cache[sub] && state.cache[sub].length) return state.cache[sub];
 
-      // old.reddit.com avoids the mobile-user-agent redirect that www.reddit.com does on iOS
+      // www.reddit.com has CORS headers (Access-Control-Allow-Origin: *) — old.reddit.com does not
       const res = await fetch(
-        `https://old.reddit.com/r/${sub}.json?limit=100&raw_json=1`
+        `https://www.reddit.com/r/${sub}.json?limit=100&raw_json=1`
       );
 
       if (!res.ok) throw new Error(`r/${sub} returned HTTP ${res.status}`);
