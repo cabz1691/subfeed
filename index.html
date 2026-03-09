@@ -572,50 +572,66 @@
     async function fetchSub(sub) {
       if (state.cache[sub] && state.cache[sub].length) return state.cache[sub];
 
+      // old.reddit.com avoids the mobile-user-agent redirect that www.reddit.com does on iOS
       const res = await fetch(
-        `https://www.reddit.com/r/${sub}.json?limit=100&raw_json=1`,
-        { headers: { Accept: 'application/json' } }
+        `https://old.reddit.com/r/${sub}.json?limit=100&raw_json=1`
       );
 
-      if (!res.ok) throw new Error(`r/${sub} returned ${res.status}`);
+      if (!res.ok) throw new Error(`r/${sub} returned HTTP ${res.status}`);
 
-      const json = await res.json();
+      let json;
+      try {
+        json = await res.json();
+      } catch (e) {
+        throw new Error(`r/${sub}: response was not valid JSON (Reddit may have rate-limited this request)`);
+      }
+
+      if (!json?.data?.children) {
+        throw new Error(`r/${sub}: unexpected response format`);
+      }
+
       const posts = json.data.children
         .map(c => c.data)
-        .filter(isMedia);
+        .filter(p => p && !p.stickied && isMedia(p));
 
       state.cache[sub] = posts;
       return posts;
     }
 
     function isMedia(p) {
-      if (p.is_video && p.media?.reddit_video?.fallback_url) return true;
-      if (/\.gifv$/i.test(p.url)) return true;
-      if (/\.mp4$/i.test(p.url)) return true;
+      // Reddit-hosted video (is_video alone is enough — fallback_url checked in getMediaInfo)
+      if (p.is_video) return true;
+      // Reddit video preview (cross-posts, embeds)
+      if (p.preview?.reddit_video_preview?.fallback_url) return true;
+      // URL-based: gifv, mp4, webm
+      if (/\.(gifv|mp4|webm)$/i.test(p.url)) return true;
+      // Preview image with an MP4 variant (GIFs converted to video)
       if (p.preview?.images?.[0]?.variants?.mp4?.source?.url) return true;
+      // Plain GIF
       if (/\.gif$/i.test(p.url)) return true;
       return false;
     }
 
     function getMediaInfo(p) {
-      // Reddit-hosted video (fallback_url is a direct MP4, works muted)
-      if (p.is_video && p.media?.reddit_video?.fallback_url) {
-        return { type: 'video', url: p.media.reddit_video.fallback_url };
+      // Reddit-hosted video
+      const rv = p.media?.reddit_video || p.preview?.reddit_video_preview;
+      if (rv?.fallback_url) {
+        return { type: 'video', url: rv.fallback_url };
       }
       // Imgur .gifv → .mp4
       if (/\.gifv$/i.test(p.url)) {
         return { type: 'video', url: p.url.replace(/\.gifv$/i, '.mp4') };
       }
-      // Direct .mp4
-      if (/\.mp4$/i.test(p.url)) {
+      // Direct .mp4 / .webm
+      if (/\.(mp4|webm)$/i.test(p.url)) {
         return { type: 'video', url: p.url };
       }
-      // GIF with an MP4 preview (better for mobile performance)
+      // GIF with MP4 preview (better mobile performance than raw GIF)
       const mp4Preview = p.preview?.images?.[0]?.variants?.mp4?.source?.url;
       if (mp4Preview) {
         return { type: 'video', url: mp4Preview };
       }
-      // Plain GIF fallback
+      // Plain GIF
       if (/\.gif$/i.test(p.url)) {
         return { type: 'gif', url: p.url };
       }
@@ -755,11 +771,14 @@
       const failed = state.subs.filter(s => !state.cache[s]?.length);
 
       if (!loaded.length) {
-        showToast('No media found — check subreddit names');
+        // Surface the actual error from the first failed result
+        const firstError = results.find(r => r.status === 'rejected');
+        const reason = firstError?.reason?.message || 'check subreddit names and try again';
+        showToast(`No media found — ${reason}`, 6000);
         return;
       }
       if (failed.length) {
-        showToast(`Could not load: ${failed.map(s => 'r/' + s).join(', ')}`);
+        showToast(`Skipped (no media): ${failed.map(s => 'r/' + s).join(', ')}`);
       }
 
       persist();
