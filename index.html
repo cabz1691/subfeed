@@ -569,33 +569,60 @@
     }
 
     // ── Reddit API ─────────────────────────────────
+
+    // Fetch JSON, falling back to a CORS proxy if the direct request is blocked (e.g. iOS Safari)
+    async function fetchJSON(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (!json?.data?.children) throw new Error('unexpected format');
+        return json;
+      } catch (_) {
+        // Fallback: route through a free CORS proxy
+        const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+        const res2 = await fetch(proxy);
+        if (!res2.ok) throw new Error(`HTTP ${res2.status} via proxy`);
+        const json2 = await res2.json();
+        if (!json2?.data?.children) throw new Error('unexpected format via proxy');
+        return json2;
+      }
+    }
+
     async function fetchSub(sub) {
       if (state.cache[sub] && state.cache[sub].length) return state.cache[sub];
 
-      // www.reddit.com has CORS headers (Access-Control-Allow-Origin: *) — old.reddit.com does not
-      const res = await fetch(
-        `https://www.reddit.com/r/${sub}.json?limit=100&raw_json=1`
-      );
+      // Fetch hot + new in parallel for a bigger, more varied pool
+      const base = `https://www.reddit.com/r/${sub}`;
+      const [hot, fresh] = await Promise.allSettled([
+        fetchJSON(`${base}/hot.json?limit=100&raw_json=1`),
+        fetchJSON(`${base}/new.json?limit=100&raw_json=1`),
+      ]);
 
-      if (!res.ok) throw new Error(`r/${sub} returned HTTP ${res.status}`);
+      const allPosts = [];
+      const seen = new Set();
 
-      let json;
-      try {
-        json = await res.json();
-      } catch (e) {
-        throw new Error(`r/${sub}: response was not valid JSON (Reddit may have rate-limited this request)`);
+      for (const result of [hot, fresh]) {
+        if (result.status !== 'fulfilled') continue;
+        for (const child of result.value.data.children) {
+          const p = child.data;
+          if (p && !p.stickied && !seen.has(p.id) && isMedia(p)) {
+            seen.add(p.id);
+            allPosts.push(p);
+          }
+        }
       }
 
-      if (!json?.data?.children) {
-        throw new Error(`r/${sub}: unexpected response format`);
+      if (!allPosts.length) throw new Error(`r/${sub}: no video/GIF posts found`);
+
+      // Shuffle so playback order is random
+      for (let i = allPosts.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allPosts[i], allPosts[j]] = [allPosts[j], allPosts[i]];
       }
 
-      const posts = json.data.children
-        .map(c => c.data)
-        .filter(p => p && !p.stickied && isMedia(p));
-
-      state.cache[sub] = posts;
-      return posts;
+      state.cache[sub] = allPosts;
+      return allPosts;
     }
 
     function isMedia(p) {
@@ -638,13 +665,24 @@
       return null;
     }
 
+    // Per-subreddit playback index so we cycle through all posts before repeating
+    const playIndex = {};
+
     function pickRandomPost() {
-      // Only use subs that have cached posts
       const available = state.subs.filter(s => state.cache[s]?.length);
       if (!available.length) return null;
-      const sub   = available[Math.floor(Math.random() * available.length)];
+      // Pick a random subreddit, then advance its index (no repeats until all seen)
+      const sub = available[Math.floor(Math.random() * available.length)];
       const posts = state.cache[sub];
-      return posts[Math.floor(Math.random() * posts.length)];
+      if (playIndex[sub] === undefined || playIndex[sub] >= posts.length) {
+        // Re-shuffle when we've cycled through everything
+        for (let i = posts.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [posts[i], posts[j]] = [posts[j], posts[i]];
+        }
+        playIndex[sub] = 0;
+      }
+      return posts[playIndex[sub]++];
     }
 
     // ── Progress Bar ───────────────────────────────
