@@ -570,59 +570,54 @@
 
     // ── Reddit API ─────────────────────────────────
 
-    // Fetch JSON, falling back to a CORS proxy if the direct request is blocked (e.g. iOS Safari)
-    async function fetchJSON(url) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        if (!json?.data?.children) throw new Error('unexpected format');
-        return json;
-      } catch (_) {
-        // Fallback: route through a free CORS proxy
-        const proxy = `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
-        const res2 = await fetch(proxy);
-        if (!res2.ok) throw new Error(`HTTP ${res2.status} via proxy`);
-        const json2 = await res2.json();
-        if (!json2?.data?.children) throw new Error('unexpected format via proxy');
-        return json2;
-      }
+    // Direct fetch, with JSONP fallback for iOS Safari (JSONP bypasses CORS entirely)
+    function fetchJSON(url) {
+      return fetch(url)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(json => {
+          if (!json?.data?.children) throw new Error('unexpected format');
+          return json;
+        })
+        .catch(() => fetchJSONP(url));
+    }
+
+    function fetchJSONP(url) {
+      return new Promise((resolve, reject) => {
+        const cb = '_sf_' + Date.now();
+        const script = document.createElement('script');
+        const cleanup = () => { delete window[cb]; script.remove(); };
+        window[cb] = data => { cleanup(); resolve(data); };
+        script.onerror = () => { cleanup(); reject(new Error('Request failed')); };
+        script.src = url + '&jsonp=' + cb;
+        setTimeout(() => { cleanup(); reject(new Error('Timed out')); }, 12000);
+        document.head.appendChild(script);
+      });
     }
 
     async function fetchSub(sub) {
-      if (state.cache[sub] && state.cache[sub].length) return state.cache[sub];
+      if (state.cache[sub]?.length) return state.cache[sub];
 
-      // Fetch hot + new in parallel for a bigger, more varied pool
-      const base = `https://www.reddit.com/r/${sub}`;
-      const [hot, fresh] = await Promise.allSettled([
-        fetchJSON(`${base}/hot.json?limit=100&raw_json=1`),
-        fetchJSON(`${base}/new.json?limit=100&raw_json=1`),
-      ]);
+      const json = await fetchJSON(
+        `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`
+      );
 
-      const allPosts = [];
-      const seen = new Set();
+      const posts = json.data.children
+        .map(c => c.data)
+        .filter(p => p && !p.stickied && isMedia(p));
 
-      for (const result of [hot, fresh]) {
-        if (result.status !== 'fulfilled') continue;
-        for (const child of result.value.data.children) {
-          const p = child.data;
-          if (p && !p.stickied && !seen.has(p.id) && isMedia(p)) {
-            seen.add(p.id);
-            allPosts.push(p);
-          }
-        }
-      }
+      if (!posts.length) throw new Error(`r/${sub}: no video/GIF posts found`);
 
-      if (!allPosts.length) throw new Error(`r/${sub}: no video/GIF posts found`);
-
-      // Shuffle so playback order is random
-      for (let i = allPosts.length - 1; i > 0; i--) {
+      // Shuffle for random playback order
+      for (let i = posts.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [allPosts[i], allPosts[j]] = [allPosts[j], allPosts[i]];
+        [posts[i], posts[j]] = [posts[j], posts[i]];
       }
 
-      state.cache[sub] = allPosts;
-      return allPosts;
+      state.cache[sub] = posts;
+      return posts;
     }
 
     function isMedia(p) {
