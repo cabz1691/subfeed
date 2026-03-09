@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#000000">
+  <title>SubFeed</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      background: none;
+      font-family: inherit;
+      color: inherit;
+    }
+
+    input {
+      font-family: inherit;
+      color: inherit;
+    }
+
+    /* ── PLAYER ──────────────────────────────────── */
+    #player {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      z-index: 1;
+    }
+
+    #media-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #media-container video,
+    #media-container img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    /* ── PROGRESS BAR ────────────────────────────── */
+    #progress-track {
+      position: fixed;
+      top: env(safe-area-inset-top, 0px);
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.12);
+      z-index: 30;
+    }
+
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #FF4500;
+      border-radius: 0 2px 2px 0;
+    }
+
+    /* ── TAP HINT ────────────────────────────────── */
+    #tap-hint {
+      position: fixed;
+      bottom: max(40px, calc(env(safe-area-inset-bottom) + 20px));
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20, 20, 20, 0.7);
+      -webkit-backdrop-filter: blur(10px);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.8);
+      padding: 10px 20px;
+      border-radius: 24px;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.1px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 20;
+      opacity: 1;
+      transition: opacity 0.8s ease;
+    }
+
+    #tap-hint.hidden {
+      opacity: 0;
+    }
+
+    /* ── LOADING ─────────────────────────────────── */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 18px;
+      z-index: 80;
+    }
+
+    #loading.show {
+      display: flex;
+    }
+
+    .spinner {
+      width: 42px;
+      height: 42px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: #FF4500;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-label {
+      font-size: 15px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.4);
+      letter-spacing: 0.1px;
+    }
+
+    /* ── TOAST ───────────────────────────────────── */
+    #toast {
+      position: fixed;
+      top: max(20px, calc(env(safe-area-inset-top) + 10px));
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(28, 28, 28, 0.95);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #fff;
+      padding: 11px 20px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      white-space: nowrap;
+      max-width: calc(100vw - 40px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #toast.show {
+      opacity: 1;
+    }
+
+    /* ── SETTINGS OVERLAY ────────────────────────── */
+    #settings-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+      z-index: 100;
+      display: flex;
+      align-items: flex-end;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    #settings-overlay.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    #settings-panel {
+      width: 100%;
+      background: #111;
+      border-radius: 22px 22px 0 0;
+      padding: 12px 22px max(36px, calc(env(safe-area-inset-bottom) + 22px));
+      transform: translateY(100%);
+      transition: transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+      max-height: 92vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #settings-overlay.open #settings-panel {
+      transform: translateY(0);
+    }
+
+    /* ── HANDLE ──────────────────────────────────── */
+    .handle {
+      width: 38px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.2);
+      margin: 0 auto 22px;
+    }
+
+    /* ── APP TITLE ───────────────────────────────── */
+    .app-title {
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
+      margin-bottom: 28px;
+      line-height: 1;
+    }
+
+    .app-title .accent {
+      color: #FF4500;
+    }
+
+    /* ── SECTIONS ────────────────────────────────── */
+    .section {
+      margin-bottom: 22px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.9px;
+      color: rgba(255, 255, 255, 0.35);
+      margin-bottom: 10px;
+    }
+
+    /* ── INPUT ROW ───────────────────────────────── */
+    .input-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    #sub-input {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1.5px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 13px 15px;
+      font-size: 16px; /* 16px prevents iOS auto-zoom */
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    #sub-input:focus {
+      border-color: #FF4500;
+      background: rgba(255, 69, 0, 0.06);
+    }
+
+    #sub-input::placeholder {
+      color: rgba(255, 255, 255, 0.22);
+    }
+
+    .btn-add {
+      background: #FF4500;
+      color: #fff;
+      border-radius: 12px;
+      padding: 13px 20px;
+      font-size: 15px;
+      font-weight: 700;
+      flex-shrink: 0;
+      transition: opacity 0.15s ease;
+    }
+
+    .btn-add:active {
+      opacity: 0.8;
+    }
+
+    /* ── SUBREDDIT LIST ──────────────────────────── */
+    #sub-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .sub-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 13px 15px;
+      animation: fadeSlideIn 0.2s ease;
+    }
+
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .sub-name {
+      font-size: 15px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .sub-remove {
+      font-size: 22px;
+      line-height: 1;
+      color: rgba(255, 255, 255, 0.28);
+      padding: 0 2px 0 14px;
+      transition: color 0.15s ease;
+    }
+
+    .sub-remove:active {
+      color: #FF4500;
+    }
+
+    .empty-hint {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.2);
+      text-align: center;
+      padding: 12px 0;
+    }
+
+    /* ── DURATION GRID ───────────────────────────── */
+    .dur-grid {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dur-btn {
+      flex: 1;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1.5px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 12px 4px;
+      font-size: 14px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.5);
+      transition: all 0.15s ease;
+    }
+
+    .dur-btn.active {
+      background: rgba(255, 69, 0, 0.15);
+      border-color: #FF4500;
+      color: #fff;
+    }
+
+    .dur-btn:active {
+      opacity: 0.7;
+    }
+
+    /* ── PLAY BUTTON ─────────────────────────────── */
+    #play-btn {
+      width: 100%;
+      background: #FF4500;
+      color: #fff;
+      border-radius: 16px;
+      padding: 17px;
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      transition: opacity 0.15s ease, transform 0.1s ease;
+      margin-top: 4px;
+    }
+
+    #play-btn:active {
+      opacity: 0.85;
+      transform: scale(0.98);
+    }
+
+    #play-btn:disabled {
+      opacity: 0.3;
+      pointer-events: none;
+    }
+
+    /* ── ORIENTATION ─────────────────────────────── */
+    @media (orientation: landscape) {
+      #media-container video,
+      #media-container img {
+        object-fit: contain;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Player -->
+  <div id="player">
+    <div id="progress-track">
+      <div id="progress-bar"></div>
+    </div>
+    <div id="media-container"></div>
+    <div id="tap-hint" class="hidden">Tap anywhere to open settings</div>
+  </div>
+
+  <!-- Loading screen -->
+  <div id="loading">
+    <div class="spinner"></div>
+    <div class="loading-label">Loading media&hellip;</div>
+  </div>
+
+  <!-- Settings overlay -->
+  <div id="settings-overlay">
+    <div id="settings-panel">
+      <div class="handle"></div>
+      <div class="app-title">Sub<span class="accent">Feed</span></div>
+
+      <!-- Subreddit input -->
+      <div class="section">
+        <div class="section-label">Subreddits</div>
+        <div class="input-row">
+          <input
+            id="sub-input"
+            type="text"
+            placeholder="gifs, oddlysatisfying, videos…"
+            autocorrect="off"
+            autocapitalize="none"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <button class="btn-add" id="btn-add">Add</button>
+        </div>
+      </div>
+
+      <!-- Subreddit list -->
+      <div class="section">
+        <div id="sub-list"></div>
+      </div>
+
+      <!-- Duration selector -->
+      <div class="section">
+        <div class="section-label">Duration per clip</div>
+        <div class="dur-grid">
+          <button class="dur-btn" data-secs="3">3s</button>
+          <button class="dur-btn" data-secs="5">5s</button>
+          <button class="dur-btn" data-secs="10">10s</button>
+          <button class="dur-btn" data-secs="30">30s</button>
+          <button class="dur-btn" data-secs="60">1 min</button>
+        </div>
+      </div>
+
+      <!-- Play button -->
+      <button id="play-btn" disabled>Start Playing</button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <script>
+    // ── State ──────────────────────────────────────
+    const state = {
+      subs: [],
+      duration: 10,
+      cache: {},       // { subredditName: [post, ...] }
+      playing: false,
+      timer: null,
+      settingsOpen: false,
+      fetching: false,
+    };
+
+    // ── Elements ───────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const player          = $('player');
+    const mediaContainer  = $('media-container');
+    const progressBar     = $('progress-bar');
+    const tapHint         = $('tap-hint');
+    const settingsOverlay = $('settings-overlay');
+    const subInput        = $('sub-input');
+    const subList         = $('sub-list');
+    const playBtn         = $('play-btn');
+    const loadingEl       = $('loading');
+    const toastEl         = $('toast');
+
+    // ── Persistence ────────────────────────────────
+    function loadSaved() {
+      try {
+        const d = JSON.parse(localStorage.getItem('subfeed') || '{}');
+        state.subs     = Array.isArray(d.subs) ? d.subs : [];
+        state.duration = typeof d.duration === 'number' ? d.duration : 10;
+      } catch (_) {}
+    }
+
+    function persist() {
+      try {
+        localStorage.setItem('subfeed', JSON.stringify({
+          subs: state.subs,
+          duration: state.duration,
+        }));
+      } catch (_) {}
+    }
+
+    // ── Toast ──────────────────────────────────────
+    let toastTimer;
+    function showToast(msg, ms = 3500) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+    }
+
+    // ── Subreddit Management ───────────────────────
+    function renderSubs() {
+      if (!state.subs.length) {
+        subList.innerHTML = '<div class="empty-hint">Add at least one subreddit above</div>';
+      } else {
+        subList.innerHTML = state.subs.map((s, i) =>
+          `<div class="sub-item">
+             <span class="sub-name">r/${s}</span>
+             <button class="sub-remove" data-index="${i}" aria-label="Remove r/${s}">×</button>
+           </div>`
+        ).join('');
+      }
+      playBtn.disabled = state.subs.length === 0;
+    }
+
+    function normalizeSub(raw) {
+      return raw.trim()
+        .replace(/^https?:\/\/(www\.)?reddit\.com\/r\//i, '')
+        .replace(/^r\//i, '')
+        .replace(/\/.*$/, '')  // strip anything after the sub name
+        .replace(/\s+/g, '');
+    }
+
+    function addSub() {
+      const val = normalizeSub(subInput.value);
+      if (!val) return;
+      if (state.subs.includes(val)) {
+        showToast(`r/${val} is already in the list`);
+        subInput.value = '';
+        return;
+      }
+      state.subs.push(val);
+      subInput.value = '';
+      renderSubs();
+    }
+
+    function removeSub(i) {
+      const sub = state.subs[i];
+      delete state.cache[sub];
+      state.subs.splice(i, 1);
+      renderSubs();
+    }
+
+    // ── Duration ───────────────────────────────────
+    function setDuration(secs) {
+      state.duration = secs;
+      document.querySelectorAll('.dur-btn').forEach(btn => {
+        btn.classList.toggle('active', Number(btn.dataset.secs) === secs);
+      });
+    }
+
+    // ── Reddit API ─────────────────────────────────
+    async function fetchSub(sub) {
+      if (state.cache[sub] && state.cache[sub].length) return state.cache[sub];
+
+      const res = await fetch(
+        `https://www.reddit.com/r/${sub}.json?limit=100&raw_json=1`,
+        { headers: { Accept: 'application/json' } }
+      );
+
+      if (!res.ok) throw new Error(`r/${sub} returned ${res.status}`);
+
+      const json = await res.json();
+      const posts = json.data.children
+        .map(c => c.data)
+        .filter(isMedia);
+
+      state.cache[sub] = posts;
+      return posts;
+    }
+
+    function isMedia(p) {
+      if (p.is_video && p.media?.reddit_video?.fallback_url) return true;
+      if (/\.gifv$/i.test(p.url)) return true;
+      if (/\.mp4$/i.test(p.url)) return true;
+      if (p.preview?.images?.[0]?.variants?.mp4?.source?.url) return true;
+      if (/\.gif$/i.test(p.url)) return true;
+      return false;
+    }
+
+    function getMediaInfo(p) {
+      // Reddit-hosted video (fallback_url is a direct MP4, works muted)
+      if (p.is_video && p.media?.reddit_video?.fallback_url) {
+        return { type: 'video', url: p.media.reddit_video.fallback_url };
+      }
+      // Imgur .gifv → .mp4
+      if (/\.gifv$/i.test(p.url)) {
+        return { type: 'video', url: p.url.replace(/\.gifv$/i, '.mp4') };
+      }
+      // Direct .mp4
+      if (/\.mp4$/i.test(p.url)) {
+        return { type: 'video', url: p.url };
+      }
+      // GIF with an MP4 preview (better for mobile performance)
+      const mp4Preview = p.preview?.images?.[0]?.variants?.mp4?.source?.url;
+      if (mp4Preview) {
+        return { type: 'video', url: mp4Preview };
+      }
+      // Plain GIF fallback
+      if (/\.gif$/i.test(p.url)) {
+        return { type: 'gif', url: p.url };
+      }
+      return null;
+    }
+
+    function pickRandomPost() {
+      // Only use subs that have cached posts
+      const available = state.subs.filter(s => state.cache[s]?.length);
+      if (!available.length) return null;
+      const sub   = available[Math.floor(Math.random() * available.length)];
+      const posts = state.cache[sub];
+      return posts[Math.floor(Math.random() * posts.length)];
+    }
+
+    // ── Progress Bar ───────────────────────────────
+    function startProgress() {
+      progressBar.style.transition = 'none';
+      progressBar.style.width = '0%';
+      // Force reflow so the reset registers before the animation starts
+      void progressBar.offsetWidth;
+      progressBar.style.transition = `width ${state.duration}s linear`;
+      progressBar.style.width = '100%';
+    }
+
+    function stopProgress() {
+      const computed = getComputedStyle(progressBar).width;
+      progressBar.style.transition = 'none';
+      progressBar.style.width = computed;
+    }
+
+    // ── Media Rendering ────────────────────────────
+    function renderMedia(info) {
+      // Fade out old content
+      const old = mediaContainer.firstElementChild;
+      if (old) {
+        old.style.opacity = '0';
+        setTimeout(() => { if (old.parentNode) old.parentNode.removeChild(old); }, 350);
+      }
+
+      if (info.type === 'video') {
+        const v = document.createElement('video');
+        v.src = info.url;
+        v.autoplay  = true;
+        v.muted     = true;
+        v.loop      = true;
+        v.playsInline = true;
+        v.setAttribute('playsinline', '');
+        v.setAttribute('webkit-playsinline', '');
+        v.style.cssText = 'width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .3s ease';
+        mediaContainer.appendChild(v);
+        v.play().catch(() => {});
+        // Double rAF ensures element is painted before fade-in
+        requestAnimationFrame(() => requestAnimationFrame(() => { v.style.opacity = '1'; }));
+      } else {
+        const img = document.createElement('img');
+        img.src = info.url;
+        img.alt = '';
+        img.style.cssText = 'width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .3s ease';
+        mediaContainer.appendChild(img);
+        img.onload = () => { img.style.opacity = '1'; };
+      }
+    }
+
+    // ── Playback Loop ──────────────────────────────
+    async function next(attempts) {
+      if (attempts === undefined) attempts = 0;
+      if (!state.playing) return;
+      if (attempts > 20) {
+        showToast('Could not find playable content — check subreddit names');
+        openSettings();
+        return;
+      }
+
+      clearTimeout(state.timer);
+
+      const post = pickRandomPost();
+      if (!post) {
+        showToast('No media found in the selected subreddits');
+        openSettings();
+        return;
+      }
+
+      const info = getMediaInfo(post);
+      if (!info) {
+        // Post matched filter but URL extraction failed — skip it
+        next(attempts + 1);
+        return;
+      }
+
+      renderMedia(info);
+      startProgress();
+      state.timer = setTimeout(() => next(0), state.duration * 1000);
+    }
+
+    // ── Settings Panel ─────────────────────────────
+    function openSettings() {
+      if (state.settingsOpen) return;
+      state.settingsOpen = true;
+
+      clearTimeout(state.timer);
+      state.timer = null;
+      stopProgress();
+
+      // Pause video if playing
+      const vid = mediaContainer.querySelector('video');
+      if (vid) vid.pause();
+
+      renderSubs();
+      settingsOverlay.classList.add('open');
+    }
+
+    function closeSettings(resume) {
+      if (!state.settingsOpen) return;
+      state.settingsOpen = false;
+      settingsOverlay.classList.remove('open');
+
+      if (resume && state.playing) {
+        // Wait for the slide-down animation to finish, then resume
+        setTimeout(() => next(0), 380);
+      }
+    }
+
+    // ── Start Playing ──────────────────────────────
+    async function startPlaying() {
+      if (!state.subs.length || state.fetching) return;
+
+      state.fetching = true;
+      loadingEl.classList.add('show');
+
+      const results = await Promise.allSettled(state.subs.map(fetchSub));
+
+      loadingEl.classList.remove('show');
+      state.fetching = false;
+
+      const loaded = state.subs.filter(s => state.cache[s]?.length);
+      const failed = state.subs.filter(s => !state.cache[s]?.length);
+
+      if (!loaded.length) {
+        showToast('No media found — check subreddit names');
+        return;
+      }
+      if (failed.length) {
+        showToast(`Could not load: ${failed.map(s => 'r/' + s).join(', ')}`);
+      }
+
+      persist();
+      state.playing = true;
+      playBtn.textContent = 'Apply & Resume';
+
+      closeSettings(false);
+      showTapHint();
+      // Small delay so the panel slides away before media appears
+      setTimeout(() => next(0), 380);
+    }
+
+    // ── Tap Hint ───────────────────────────────────
+    let hintTimer;
+    function showTapHint() {
+      tapHint.classList.remove('hidden');
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => tapHint.classList.add('hidden'), 3500);
+    }
+
+    // ── Event Listeners ────────────────────────────
+
+    // Tap anywhere on player → open settings (only when playing)
+    player.addEventListener('click', () => {
+      if (state.playing && !state.settingsOpen) {
+        openSettings();
+      }
+    });
+
+    // Tap backdrop → close and resume
+    settingsOverlay.addEventListener('click', e => {
+      if (e.target === settingsOverlay && state.playing) {
+        closeSettings(true);
+      }
+    });
+
+    // Add subreddit on Enter key
+    subInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addSub();
+      }
+    });
+
+    // Add button
+    $('btn-add').addEventListener('click', addSub);
+
+    // Duration buttons (event delegation)
+    document.querySelector('.dur-grid').addEventListener('click', e => {
+      const btn = e.target.closest('.dur-btn');
+      if (btn) setDuration(Number(btn.dataset.secs));
+    });
+
+    // Sub-list remove buttons (event delegation)
+    subList.addEventListener('click', e => {
+      const btn = e.target.closest('.sub-remove');
+      if (btn) removeSub(Number(btn.dataset.index));
+    });
+
+    // Play button
+    playBtn.addEventListener('click', startPlaying);
+
+    // Orientation change: nudge layout recalculation
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => {
+        const vid = mediaContainer.querySelector('video');
+        if (vid) {
+          // Trigger layout refresh
+          vid.style.display = 'none';
+          void vid.offsetHeight;
+          vid.style.display = '';
+        }
+      }, 200);
+    });
+
+    // ── Init ───────────────────────────────────────
+    loadSaved();
+    renderSubs();
+    setDuration(state.duration);
+
+    if (state.subs.length) {
+      playBtn.textContent = 'Apply & Resume';
+    }
+
+    // Show settings on every page load
+    // (use a small delay so the slide-up animation is visible)
+    requestAnimationFrame(() => {
+      settingsOverlay.classList.add('open');
+      state.settingsOpen = true;
+    });
+  </script>
+</body>
+</html>
