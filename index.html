@@ -331,6 +331,26 @@
       color: #FF4500;
     }
 
+    .sub-item--err {
+      border: 1px solid rgba(255, 69, 0, 0.35);
+    }
+
+    .sub-err-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      background: #FF4500;
+      color: #fff;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 800;
+      margin-left: 7px;
+      vertical-align: middle;
+      line-height: 1;
+    }
+
     .empty-hint {
       font-size: 14px;
       color: rgba(255, 255, 255, 0.2);
@@ -449,8 +469,8 @@
       <div class="section">
         <div class="section-label">Duration per clip</div>
         <div class="dur-grid">
-          <button class="dur-btn" data-secs="3">3s</button>
           <button class="dur-btn" data-secs="5">5s</button>
+          <button class="dur-btn" data-secs="7">7s</button>
           <button class="dur-btn" data-secs="10">10s</button>
           <button class="dur-btn" data-secs="30">30s</button>
           <button class="dur-btn" data-secs="60">1 min</button>
@@ -471,6 +491,7 @@
       subs: [],
       duration: 10,
       cache: {},       // { subredditName: [post, ...] }
+      subErrors: {},   // { subredditName: errorMessage }
       playing: false,
       timer: null,
       settingsOpen: false,
@@ -522,12 +543,13 @@
       if (!state.subs.length) {
         subList.innerHTML = '<div class="empty-hint">Add at least one subreddit above</div>';
       } else {
-        subList.innerHTML = state.subs.map((s, i) =>
-          `<div class="sub-item">
-             <span class="sub-name">r/${s}</span>
+        subList.innerHTML = state.subs.map((s, i) => {
+          const err = state.subErrors[s];
+          return `<div class="sub-item ${err ? 'sub-item--err' : ''}">
+             <span class="sub-name">r/${s}${err ? '<span class="sub-err-badge">!</span>' : ''}</span>
              <button class="sub-remove" data-index="${i}" aria-label="Remove r/${s}">×</button>
-           </div>`
-        ).join('');
+           </div>`;
+        }).join('');
       }
       playBtn.disabled = state.subs.length === 0;
     }
@@ -570,7 +592,7 @@
 
     // ── Reddit API ─────────────────────────────────
 
-    // Direct fetch, with JSONP fallback for iOS Safari (JSONP bypasses CORS entirely)
+    // Direct fetch, with JSONP fallback only for network/CORS failures (iOS Safari)
     function fetchJSON(url) {
       return fetch(url)
         .then(res => {
@@ -581,7 +603,12 @@
           if (!json?.data?.children) throw new Error('unexpected format');
           return json;
         })
-        .catch(() => fetchJSONP(url));
+        .catch(err => {
+          // TypeError = network failure or CORS block (e.g. iOS Safari)
+          // Other errors (HTTP 4xx, bad JSON) should surface as-is
+          if (err instanceof TypeError) return fetchJSONP(url);
+          throw err;
+        });
     }
 
     function fetchJSONP(url) {
@@ -696,28 +723,74 @@
       progressBar.style.width = computed;
     }
 
+    // ── Preload ─────────────────────────────────────
+    // Stores the next post's info + a buffering video element so clips are ready instantly
+    let _nextInfo = null;
+    let _preloadEl = null;
+
+    function preloadNext() {
+      // Release previous preload
+      if (_preloadEl) { _preloadEl.src = ''; _preloadEl = null; }
+      _nextInfo = null;
+
+      const post = pickRandomPost();
+      if (!post) return;
+      const info = getMediaInfo(post);
+      if (!info) return;
+
+      _nextInfo = info;
+
+      if (info.type === 'video') {
+        const v = document.createElement('video');
+        v.src = info.url;
+        v.muted = true;
+        v.preload = 'auto';
+        // Keep off-screen but in DOM so the browser actually buffers it
+        v.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none';
+        document.body.appendChild(v);
+        _preloadEl = v;
+      }
+    }
+
+    function consumePreload() {
+      const info = _nextInfo;
+      const el   = _preloadEl;
+      _nextInfo = null;
+      _preloadEl = null;
+      return { info, el };
+    }
+
     // ── Media Rendering ────────────────────────────
     const FADE = 200; // ms — crossfade duration
 
-    function renderMedia(info) {
+    function renderMedia(info, preloadedEl, onError) {
       const old = mediaContainer.firstElementChild;
 
-      // Build the new element but keep it invisible
       let el;
       if (info.type === 'video') {
-        el = document.createElement('video');
-        el.src = info.url;
-        el.autoplay   = true;
-        el.muted      = true;
-        el.loop       = true;
+        // Reuse the preloaded element if we have one, otherwise create fresh
+        el = preloadedEl || document.createElement('video');
+        if (!preloadedEl) {
+          el.src = info.url;
+        }
+        el.autoplay    = true;
+        el.muted       = true;
+        el.loop        = true;
         el.playsInline = true;
         el.setAttribute('playsinline', '');
         el.setAttribute('webkit-playsinline', '');
+        if (onError) {
+          el.onerror = onError;
+          // Also skip if the video stalls for more than 8s without being able to play
+          const stallTimer = setTimeout(onError, 8000);
+          el.oncanplay = () => clearTimeout(stallTimer);
+        }
         el.play().catch(() => {});
       } else {
         el = document.createElement('img');
         el.src = info.url;
         el.alt = '';
+        if (onError) el.onerror = onError;
       }
 
       // Stack absolutely so old and new overlap during crossfade
@@ -747,23 +820,29 @@
 
       clearTimeout(state.timer);
 
-      const post = pickRandomPost();
-      if (!post) {
-        showToast('No media found in the selected subreddits');
-        openSettings();
-        return;
+      // Use preloaded clip if this is a clean advance (not a skip/retry)
+      let info, preloadedEl;
+      if (attempts === 0 && _nextInfo) {
+        const p = consumePreload();
+        info = p.info;
+        preloadedEl = p.el;
+      } else {
+        const post = pickRandomPost();
+        if (!post) {
+          showToast('No media found in the selected subreddits');
+          openSettings();
+          return;
+        }
+        info = getMediaInfo(post);
+        if (!info) { next(attempts + 1); return; }
       }
 
-      const info = getMediaInfo(post);
-      if (!info) {
-        // Post matched filter but URL extraction failed — skip it
-        next(attempts + 1);
-        return;
-      }
-
-      renderMedia(info);
+      renderMedia(info, preloadedEl, () => next(attempts + 1));
       startProgress();
       state.timer = setTimeout(() => next(0), state.duration * 1000);
+
+      // Start buffering the clip after this one
+      setTimeout(preloadNext, 300);
     }
 
     // ── Settings Panel ─────────────────────────────
@@ -774,6 +853,10 @@
       clearTimeout(state.timer);
       state.timer = null;
       stopProgress();
+
+      // Discard preloaded clip — subreddits or duration may change
+      if (_preloadEl) { _preloadEl.src = ''; _preloadEl = null; }
+      _nextInfo = null;
 
       // Pause video if playing
       const vid = mediaContainer.querySelector('video');
@@ -806,18 +889,27 @@
       loadingEl.classList.remove('show');
       state.fetching = false;
 
+      // Record which subs failed so we can show it in the settings list
+      state.subErrors = {};
+      results.forEach((r, i) => {
+        if (r.status === 'rejected' || !state.cache[state.subs[i]]?.length) {
+          state.subErrors[state.subs[i]] = r.reason?.message || 'no media found';
+        }
+      });
+
       const loaded = state.subs.filter(s => state.cache[s]?.length);
-      const failed = state.subs.filter(s => !state.cache[s]?.length);
 
       if (!loaded.length) {
-        // Surface the actual error from the first failed result
         const firstError = results.find(r => r.status === 'rejected');
         const reason = firstError?.reason?.message || 'check subreddit names and try again';
         showToast(`No media found — ${reason}`, 6000);
+        renderSubs(); // refresh list to show error indicators
         return;
       }
-      if (failed.length) {
-        showToast(`Skipped (no media): ${failed.map(s => 'r/' + s).join(', ')}`);
+
+      const failedNames = state.subs.filter(s => state.subErrors[s]);
+      if (failedNames.length) {
+        showToast(`Couldn't load: ${failedNames.map(s => 'r/' + s).join(', ')}`);
       }
 
       persist();
