@@ -595,9 +595,19 @@
     async function fetchSub(sub) {
       if (state.cache[sub]?.length) return state.cache[sub];
 
-      const res = await fetch(
-        `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`
-      );
+      const url = `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`;
+      let res;
+      try {
+        res = await fetch(url);
+      } catch (_) {
+        // Network error (iOS "Load failed") — wait 1s and retry once
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          res = await fetch(url);
+        } catch (e) {
+          throw new Error(`r/${sub}: network error — ${e.message}`);
+        }
+      }
       if (!res.ok) throw new Error(`r/${sub}: HTTP ${res.status}`);
 
       let json;
