@@ -603,13 +603,9 @@
           if (!json?.data?.children) throw new Error('unexpected format');
           return json;
         })
-        .catch(err => {
-          // TypeError  = network/CORS failure (iOS Safari)
-          // SyntaxError = Reddit returned HTML instead of JSON (rate limit, bot detection)
-          // Both are recoverable via JSONP
-          if (err instanceof TypeError || err instanceof SyntaxError) return fetchJSONP(url);
-          throw err;
-        });
+        .catch(() => fetchJSONP(url));
+      // Any failure (CORS, HTML response, rate limit JSON, unexpected format)
+      // falls back to JSONP — it's a direct script tag with no third-party dependency
     }
 
     function fetchJSONP(url) {
@@ -785,12 +781,12 @@
         el.setAttribute('playsinline', '');
         el.setAttribute('webkit-playsinline', '');
 
-        // Skip after 4s if the video never gets data
+        // Skip after 2s if the video never gets data
         const stallTimer = setTimeout(() => {
           el.oncanplay = null;
           el.onerror   = null;
           if (onError) onError();
-        }, 4000);
+        }, 2000);
 
         el.onerror = () => { clearTimeout(stallTimer); if (onError) onError(); };
 
