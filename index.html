@@ -604,9 +604,10 @@
           return json;
         })
         .catch(err => {
-          // TypeError = network failure or CORS block (e.g. iOS Safari)
-          // Other errors (HTTP 4xx, bad JSON) should surface as-is
-          if (err instanceof TypeError) return fetchJSONP(url);
+          // TypeError  = network/CORS failure (iOS Safari)
+          // SyntaxError = Reddit returned HTML instead of JSON (rate limit, bot detection)
+          // Both are recoverable via JSONP
+          if (err instanceof TypeError || err instanceof SyntaxError) return fetchJSONP(url);
           throw err;
         });
     }
@@ -761,12 +762,17 @@
     }
 
     // ── Media Rendering ────────────────────────────
-    const FADE_IN = 150; // ms — new clip fades in; old is removed instantly (no overlap)
+    const FADE_IN = 150; // ms fade-in once video has data; old removed instantly
 
     function renderMedia(info, preloadedEl, onError) {
-      // Remove old immediately so only one video is ever visible
+      // Remove old immediately — only one video visible at a time
       const old = mediaContainer.firstElementChild;
       if (old) old.remove();
+
+      const show = el => {
+        el.style.transition = `opacity ${FADE_IN}ms ease`;
+        el.style.opacity = '1';
+      };
 
       let el;
       if (info.type === 'video') {
@@ -778,23 +784,42 @@
         el.playsInline = true;
         el.setAttribute('playsinline', '');
         el.setAttribute('webkit-playsinline', '');
-        if (onError) {
-          el.onerror = onError;
-          const stallTimer = setTimeout(onError, 8000);
-          el.oncanplay = () => clearTimeout(stallTimer);
+
+        // Skip after 4s if the video never gets data
+        const stallTimer = setTimeout(() => {
+          el.oncanplay = null;
+          el.onerror   = null;
+          if (onError) onError();
+        }, 4000);
+
+        el.onerror = () => { clearTimeout(stallTimer); if (onError) onError(); };
+
+        if (el.readyState >= 3) {
+          // Already buffered (preloaded) — show immediately
+          clearTimeout(stallTimer);
+          el.play().catch(() => {});
+          el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0';
+          mediaContainer.appendChild(el);
+          requestAnimationFrame(() => requestAnimationFrame(() => show(el)));
+        } else {
+          // Wait until the browser has enough data before revealing
+          el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0';
+          mediaContainer.appendChild(el);
+          el.oncanplay = () => { clearTimeout(stallTimer); show(el); };
+          el.play().catch(() => {});
         }
-        el.play().catch(() => {});
       } else {
         el = document.createElement('img');
         el.src = info.url;
         el.alt = '';
-        if (onError) el.onerror = onError;
+        el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0';
+        mediaContainer.appendChild(el);
+        if (onError) el.onerror = () => { el.onerror = null; onError(); };
+        el.onload = () => show(el);
+        // Skip if image never loads
+        const imgTimer = setTimeout(() => { el.onload = null; if (onError) onError(); }, 6000);
+        el.onload = () => { clearTimeout(imgTimer); show(el); };
       }
-
-      // Start invisible, fade in — old is already gone so nothing bleeds through
-      el.style.cssText = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity ${FADE_IN}ms ease`;
-      mediaContainer.appendChild(el);
-      requestAnimationFrame(() => requestAnimationFrame(() => { el.style.opacity = '1'; }));
     }
 
     // ── Playback Loop ──────────────────────────────
