@@ -592,41 +592,19 @@
 
     // ── Reddit API ─────────────────────────────────
 
-    // Direct fetch, with JSONP fallback only for network/CORS failures (iOS Safari)
-    function fetchJSON(url) {
-      return fetch(url)
-        .then(res => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
-        })
-        .then(json => {
-          if (!json?.data?.children) throw new Error('unexpected format');
-          return json;
-        })
-        .catch(() => fetchJSONP(url));
-      // Any failure (CORS, HTML response, rate limit JSON, unexpected format)
-      // falls back to JSONP — it's a direct script tag with no third-party dependency
-    }
-
-    function fetchJSONP(url) {
-      return new Promise((resolve, reject) => {
-        const cb = '_sf_' + Date.now();
-        const script = document.createElement('script');
-        const cleanup = () => { delete window[cb]; script.remove(); };
-        window[cb] = data => { cleanup(); resolve(data); };
-        script.onerror = () => { cleanup(); reject(new Error('Request failed')); };
-        script.src = url + '&jsonp=' + cb;
-        setTimeout(() => { cleanup(); reject(new Error('Timed out')); }, 12000);
-        document.head.appendChild(script);
-      });
-    }
-
     async function fetchSub(sub) {
       if (state.cache[sub]?.length) return state.cache[sub];
 
-      const json = await fetchJSON(
+      const res = await fetch(
         `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`
       );
+      if (!res.ok) throw new Error(`r/${sub}: HTTP ${res.status}`);
+
+      let json;
+      try { json = await res.json(); } catch {
+        throw new Error(`r/${sub}: unexpected response (possible rate limit)`);
+      }
+      if (!json?.data?.children) throw new Error(`r/${sub}: no data returned`);
 
       const posts = json.data.children
         .map(c => c.data)
