@@ -592,29 +592,45 @@
 
     // ── Reddit API ─────────────────────────────────
 
+    // Direct fetch, with JSONP fallback only for network/CORS failures (iOS Safari)
+    function fetchJSON(url) {
+      return fetch(url)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(json => {
+          if (!json?.data?.children) throw new Error('unexpected format');
+          return json;
+        })
+        .catch(err => {
+          // TypeError  = network/CORS failure (iOS Safari)
+          // SyntaxError = Reddit returned HTML instead of JSON (rate limit, bot detection)
+          // Both are recoverable via JSONP
+          if (err instanceof TypeError || err instanceof SyntaxError) return fetchJSONP(url);
+          throw err;
+        });
+    }
+
+    function fetchJSONP(url) {
+      return new Promise((resolve, reject) => {
+        const cb = '_sf_' + Date.now();
+        const script = document.createElement('script');
+        const cleanup = () => { delete window[cb]; script.remove(); };
+        window[cb] = data => { cleanup(); resolve(data); };
+        script.onerror = () => { cleanup(); reject(new Error('Request failed')); };
+        script.src = url + '&jsonp=' + cb;
+        setTimeout(() => { cleanup(); reject(new Error('Timed out')); }, 12000);
+        document.head.appendChild(script);
+      });
+    }
+
     async function fetchSub(sub) {
       if (state.cache[sub]?.length) return state.cache[sub];
 
-      const url = `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`;
-      let res;
-      try {
-        res = await fetch(url);
-      } catch (_) {
-        // Network error (iOS "Load failed") — wait 1s and retry once
-        await new Promise(r => setTimeout(r, 1000));
-        try {
-          res = await fetch(url);
-        } catch (e) {
-          throw new Error(`r/${sub}: network error — ${e.message}`);
-        }
-      }
-      if (!res.ok) throw new Error(`r/${sub}: HTTP ${res.status}`);
-
-      let json;
-      try { json = await res.json(); } catch {
-        throw new Error(`r/${sub}: unexpected response (possible rate limit)`);
-      }
-      if (!json?.data?.children) throw new Error(`r/${sub}: no data returned`);
+      const json = await fetchJSON(
+        `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`
+      );
 
       const posts = json.data.children
         .map(c => c.data)
@@ -769,12 +785,12 @@
         el.setAttribute('playsinline', '');
         el.setAttribute('webkit-playsinline', '');
 
-        // Skip after 2s if the video never gets data
+        // Skip after 4s if the video never gets data
         const stallTimer = setTimeout(() => {
           el.oncanplay = null;
           el.onerror   = null;
           if (onError) onError();
-        }, 2000);
+        }, 4000);
 
         el.onerror = () => { clearTimeout(stallTimer); if (onError) onError(); };
 
