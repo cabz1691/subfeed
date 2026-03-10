@@ -764,12 +764,12 @@
         el.setAttribute('playsinline', '');
         el.setAttribute('webkit-playsinline', '');
 
-        // Skip after 2s if the video never gets data
+        // Skip after 4s if the video never gets data
         const stallTimer = setTimeout(() => {
           el.oncanplay = null;
           el.onerror   = null;
           if (onError) onError();
-        }, 2000);
+        }, 4000);
 
         el.onerror = () => { clearTimeout(stallTimer); if (onError) onError(); };
 
@@ -875,6 +875,9 @@
     // ── Start Playing ──────────────────────────────
     async function startPlaying() {
       if (!state.subs.length || state.fetching) return;
+
+      // Fresh start — clear blacklist so previously-stalled URLs get another chance
+      state.failedUrls.clear();
 
       state.fetching = true;
       loadingEl.classList.add('show');
