@@ -761,18 +761,17 @@
     }
 
     // ── Media Rendering ────────────────────────────
-    const FADE = 200; // ms — crossfade duration
+    const FADE_IN = 150; // ms — new clip fades in; old is removed instantly (no overlap)
 
     function renderMedia(info, preloadedEl, onError) {
+      // Remove old immediately so only one video is ever visible
       const old = mediaContainer.firstElementChild;
+      if (old) old.remove();
 
       let el;
       if (info.type === 'video') {
-        // Reuse the preloaded element if we have one, otherwise create fresh
         el = preloadedEl || document.createElement('video');
-        if (!preloadedEl) {
-          el.src = info.url;
-        }
+        if (!preloadedEl) el.src = info.url;
         el.autoplay    = true;
         el.muted       = true;
         el.loop        = true;
@@ -781,7 +780,6 @@
         el.setAttribute('webkit-playsinline', '');
         if (onError) {
           el.onerror = onError;
-          // Also skip if the video stalls for more than 8s without being able to play
           const stallTimer = setTimeout(onError, 8000);
           el.oncanplay = () => clearTimeout(stallTimer);
         }
@@ -793,19 +791,10 @@
         if (onError) el.onerror = onError;
       }
 
-      // Stack absolutely so old and new overlap during crossfade
-      el.style.cssText = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity ${FADE}ms ease`;
+      // Start invisible, fade in — old is already gone so nothing bleeds through
+      el.style.cssText = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity ${FADE_IN}ms ease`;
       mediaContainer.appendChild(el);
-
-      // Trigger crossfade: new fades in, old fades out simultaneously
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        el.style.opacity = '1';
-        if (old) {
-          old.style.transition = `opacity ${FADE}ms ease`;
-          old.style.opacity = '0';
-          setTimeout(() => old.remove(), FADE + 50);
-        }
-      }));
+      requestAnimationFrame(() => requestAnimationFrame(() => { el.style.opacity = '1'; }));
     }
 
     // ── Playback Loop ──────────────────────────────
