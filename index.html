@@ -490,9 +490,8 @@
     const state = {
       subs: [],
       duration: 10,
-      cache: {},        // { subredditName: [post, ...] }
-      subErrors: {},    // { subredditName: errorMessage }
-      failedUrls: new Set(), // URLs that stalled/errored — skip on retry
+      cache: {},       // { subredditName: [post, ...] }
+      subErrors: {},   // { subredditName: errorMessage }
       playing: false,
       timer: null,
       settingsOpen: false,
@@ -699,45 +698,41 @@
       progressBar.style.width = computed;
     }
 
-    // ── Preload Queue ────────────────────────────────
-    // Buffer multiple clips ahead so there's no black gap between videos
-    const PRELOAD_AHEAD = 1;
-    const _preloadQueue = []; // [{ info, el }, ...]
+    // ── Preload ─────────────────────────────────────
+    // Stores the next post's info + a buffering video element so clips are ready instantly
+    let _nextInfo = null;
+    let _preloadEl = null;
 
     function preloadNext() {
-      let tries = 0;
-      while (_preloadQueue.length < PRELOAD_AHEAD && tries < 10) {
-        tries++;
-        const post = pickRandomPost();
-        if (!post) break;
-        const info = getMediaInfo(post);
-        if (!info || state.failedUrls.has(info.url)) continue;
+      // Release previous preload
+      if (_preloadEl) { _preloadEl.src = ''; _preloadEl = null; }
+      _nextInfo = null;
 
-        let el = null;
-        if (info.type === 'video') {
-          el = document.createElement('video');
-          el.src = info.url;
-          el.muted = true;
-          el.preload = 'auto';
-          el.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none';
-          document.body.appendChild(el);
-        }
-        _preloadQueue.push({ info, el });
+      const post = pickRandomPost();
+      if (!post) return;
+      const info = getMediaInfo(post);
+      if (!info) return;
+
+      _nextInfo = info;
+
+      if (info.type === 'video') {
+        const v = document.createElement('video');
+        v.src = info.url;
+        v.muted = true;
+        v.preload = 'auto';
+        // Keep off-screen but in DOM so the browser actually buffers it
+        v.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none';
+        document.body.appendChild(v);
+        _preloadEl = v;
       }
     }
 
     function consumePreload() {
-      if (!_preloadQueue.length) return { info: null, el: null };
-      const item = _preloadQueue.shift();
-      preloadNext(); // keep queue filled
-      return item;
-    }
-
-    function clearPreloadQueue() {
-      for (const { el } of _preloadQueue) {
-        if (el) { el.src = ''; el.remove(); }
-      }
-      _preloadQueue.length = 0;
+      const info = _nextInfo;
+      const el   = _preloadEl;
+      _nextInfo = null;
+      _preloadEl = null;
+      return { info, el };
     }
 
     // ── Media Rendering ────────────────────────────
@@ -764,12 +759,12 @@
         el.setAttribute('playsinline', '');
         el.setAttribute('webkit-playsinline', '');
 
-        // Skip after 4s if the video never gets data
+        // Skip after 2s if the video never gets data
         const stallTimer = setTimeout(() => {
           el.oncanplay = null;
           el.onerror   = null;
           if (onError) onError();
-        }, 4000);
+        }, 2000);
 
         el.onerror = () => { clearTimeout(stallTimer); if (onError) onError(); };
 
@@ -815,7 +810,7 @@
 
       // Use preloaded clip if this is a clean advance (not a skip/retry)
       let info, preloadedEl;
-      if (attempts === 0 && _preloadQueue.length) {
+      if (attempts === 0 && _nextInfo) {
         const p = consumePreload();
         info = p.info;
         preloadedEl = p.el;
@@ -827,18 +822,15 @@
           return;
         }
         info = getMediaInfo(post);
-        if (!info || state.failedUrls.has(info.url)) { next(attempts + 1); return; }
+        if (!info) { next(attempts + 1); return; }
       }
 
-      renderMedia(info, preloadedEl, () => {
-        state.failedUrls.add(info.url); // blacklist so it won't be retried
-        next(attempts + 1);
-      });
+      renderMedia(info, preloadedEl, () => next(attempts + 1));
       startProgress();
       state.timer = setTimeout(() => next(0), state.duration * 1000);
 
-      // Keep preload queue filled
-      preloadNext();
+      // Start buffering the clip after this one
+      setTimeout(preloadNext, 300);
     }
 
     // ── Settings Panel ─────────────────────────────
@@ -850,8 +842,9 @@
       state.timer = null;
       stopProgress();
 
-      // Discard preloaded clips — subreddits or duration may change
-      clearPreloadQueue();
+      // Discard preloaded clip — subreddits or duration may change
+      if (_preloadEl) { _preloadEl.src = ''; _preloadEl = null; }
+      _nextInfo = null;
 
       // Pause video if playing
       const vid = mediaContainer.querySelector('video');
@@ -875,9 +868,6 @@
     // ── Start Playing ──────────────────────────────
     async function startPlaying() {
       if (!state.subs.length || state.fetching) return;
-
-      // Fresh start — clear blacklist so previously-stalled URLs get another chance
-      state.failedUrls.clear();
 
       state.fetching = true;
       loadingEl.classList.add('show');
@@ -913,9 +903,6 @@
       persist();
       state.playing = true;
       playBtn.textContent = 'Apply & Resume';
-
-      // Start buffering clips now while the panel slides away
-      preloadNext();
 
       closeSettings(false);
       showTapHint();
