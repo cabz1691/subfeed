@@ -628,11 +628,22 @@
     async function fetchSub(sub) {
       if (state.cache[sub]?.length) return state.cache[sub];
 
-      const json = await fetchJSON(
-        `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`
-      );
+      const base = `https://www.reddit.com/r/${sub}/hot.json?limit=100&raw_json=1`;
 
-      const posts = json.data.children
+      // Page 1
+      const json1 = await fetchJSON(base);
+      let children = json1.data.children;
+
+      // Page 2 — use the after token if available; ignore failure
+      const after = json1.data.after;
+      if (after) {
+        try {
+          const json2 = await fetchJSON(`${base}&after=${after}`);
+          children = children.concat(json2.data.children);
+        } catch (_) {}
+      }
+
+      const posts = children
         .map(c => c.data)
         .filter(p => p && !p.stickied && isMedia(p));
 
